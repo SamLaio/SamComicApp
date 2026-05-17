@@ -1,0 +1,12 @@
+.gradle/
+.idea/
+local.properties
+build/
+app/build/
+app/release/
+*.iml
+gradle/*
+!gradle/wrapper/
+gradle/wrapper/dists/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
