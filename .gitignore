@@ -5,6 +5,7 @@ build/
 app/build/
 app/release/
 *.iml
+RELEASE*
 gradle/*
 !gradle/wrapper/
 gradle/wrapper/dists/
