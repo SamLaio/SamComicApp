@@ -17,6 +17,9 @@ class OpdsParser {
         var currentEntry: MutableEntry? = null
         var currentText = ""
         var inAuthor = false
+        var totalResults: Int? = null
+        var itemsPerPage: Int? = null
+        var startIndex: Int? = null
 
         var eventType = parser.eventType
         while (eventType != XmlPullParser.END_DOCUMENT) {
@@ -63,6 +66,9 @@ class OpdsParser {
                             }
                         }
 
+                        "totalResults" -> if (currentEntry == null) totalResults = text.toIntOrNull()
+                        "itemsPerPage" -> if (currentEntry == null) itemsPerPage = text.toIntOrNull()
+                        "startIndex" -> if (currentEntry == null) startIndex = text.toIntOrNull()
                         "author" -> inAuthor = false
                         "entry" -> {
                             currentEntry?.let {
@@ -86,7 +92,10 @@ class OpdsParser {
         return OpdsFeed(
             title = feedTitle,
             entries = entries,
-            links = feedLinks
+            links = feedLinks,
+            totalResults = totalResults,
+            itemsPerPage = itemsPerPage,
+            startIndex = startIndex
         )
     }
 

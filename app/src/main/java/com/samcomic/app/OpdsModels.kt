@@ -3,7 +3,10 @@ package com.samcomic.app
 data class OpdsFeed(
     val title: String,
     val entries: List<OpdsEntry>,
-    val links: List<OpdsLink>
+    val links: List<OpdsLink>,
+    val totalResults: Int? = null,
+    val itemsPerPage: Int? = null,
+    val startIndex: Int? = null
 )
 
 data class OpdsEntry(

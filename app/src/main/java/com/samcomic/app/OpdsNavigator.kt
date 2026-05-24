@@ -1,19 +1,23 @@
 package com.samcomic.app
 
 import java.net.URI
+import java.net.URLEncoder
 
 class OpdsNavigator {
     private var currentFeedUrl: String = ""
     private var currentFeedLinks: List<OpdsLink> = emptyList()
+    private var currentSearchTemplate: String? = null
 
     fun updateFeedContext(url: String, links: List<OpdsLink>) {
         currentFeedUrl = url
         currentFeedLinks = links
+        currentSearchTemplate = null
     }
 
     fun reset() {
         currentFeedUrl = ""
         currentFeedLinks = emptyList()
+        currentSearchTemplate = null
     }
 
     fun resolveFromCurrent(href: String): String {
@@ -59,6 +63,45 @@ class OpdsNavigator {
         return resolveFromCurrent(link.href).ifBlank { null }
     }
 
+    fun directSearchTemplate(): String? {
+        val link = searchLink() ?: return null
+        if (!link.href.contains("{searchTerms", ignoreCase = true)) return null
+        return resolveTemplate(currentFeedUrl, link.href).ifBlank { null }
+    }
+
+    fun searchDescriptionUrl(): String? {
+        val link = searchLink() ?: return null
+        if (link.href.contains("{searchTerms", ignoreCase = true)) return null
+        return resolveFromCurrent(link.href).ifBlank { null }
+    }
+
+    fun resolveTemplate(baseUrl: String, template: String): String {
+        val searchToken = "__SAM_SEARCH_TERMS__"
+        val optionalSearchToken = "__SAM_SEARCH_TERMS_OPTIONAL__"
+        val placeholderTemplate = template
+            .replace("{searchTerms}", searchToken, ignoreCase = true)
+            .replace("{searchTerms?}", optionalSearchToken, ignoreCase = true)
+        val resolved = resolveUrl(baseUrl, placeholderTemplate)
+        return resolved
+            .replace(optionalSearchToken, "{searchTerms?}")
+            .replace(searchToken, "{searchTerms}")
+    }
+
+    fun updateSearchTemplate(template: String?) {
+        currentSearchTemplate = template
+    }
+
+    fun canSearch(): Boolean = currentSearchTemplate != null
+
+    fun searchUrl(query: String): String? {
+        val template = currentSearchTemplate ?: return null
+        val encoded = URLEncoder.encode(query, Charsets.UTF_8.name())
+        return template
+            .replace("{searchTerms}", encoded, ignoreCase = true)
+            .replace("{searchTerms?}", encoded, ignoreCase = true)
+            .replace(Regex("\\{[^}]+\\}"), "")
+    }
+
     private fun isSupportedComic(type: String, url: String, extension: String): Boolean {
         if (extension in setOf("pdf", "cbz", "zip", "epub")) return true
         val normalized = type.lowercase().substringBefore(";").trim()
@@ -95,5 +138,11 @@ class OpdsNavigator {
         return runCatching {
             if (baseUrl.isBlank()) href else URI(baseUrl).resolve(href).toString()
         }.getOrElse { href }
+    }
+
+    private fun searchLink(): OpdsLink? {
+        return currentFeedLinks.firstOrNull { link ->
+            link.rel.contains("search", ignoreCase = true)
+        }
     }
 }

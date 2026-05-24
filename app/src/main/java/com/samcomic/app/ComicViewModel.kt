@@ -31,7 +31,9 @@ data class ComicUiState(
     val canGoBack: Boolean = false,
     val canGoNext: Boolean = false,
     val canGoPrevious: Boolean = false,
+    val canSearch: Boolean = false,
     val status: String = "",
+    val catalogPageLabel: String = "",
     val catalogVersion: Int = 0,
     val downloadingComic: Boolean = false,
     val downloadProgress: Float? = null,
@@ -62,6 +64,7 @@ class ComicViewModel(
     private var readQueue: List<QueuedComic> = emptyList()
     private var readQueueIndex: Int = -1
     private var activeProgress: ActiveReadingProgress? = null
+    private var knownSearchTemplate: String? = null
 
     fun updateOpdsUrl(value: String) {
         _uiState.value = _uiState.value.copy(opdsUrl = value)
@@ -83,6 +86,8 @@ class ComicViewModel(
         }
         history.clear()
         navigator.reset()
+        knownSearchTemplate = null
+        _uiState.value = _uiState.value.copy(canSearch = false)
         loadFeed(url, replaceInputUrl = true, rememberSuccessfulConnection = true)
     }
 
@@ -117,12 +122,43 @@ class ComicViewModel(
             }
     }
 
+    fun searchCatalog(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "請輸入搜尋關鍵字")
+            return
+        }
+        val target = navigator.searchUrl(trimmed)
+        if (target.isNullOrBlank()) {
+            _uiState.value = _uiState.value.copy(error = "這個 OPDS 目錄沒有提供搜尋功能")
+            return
+        }
+        if (currentFeedUrl.isNotBlank()) history.addLast(currentFeedUrl)
+        loadFeed(
+            targetUrl = target,
+            replaceInputUrl = false,
+            rememberSuccessfulConnection = false,
+            statusMessage = "搜尋 OPDS 中"
+        )
+    }
+
     fun readableLinks(entry: OpdsEntry): List<ReadableLink> {
         return navigator.readableLinks(entry)
     }
 
     fun hasNavigation(entry: OpdsEntry): Boolean {
         return navigator.pickNavigationLink(entry) != null
+    }
+
+    fun readingProgressLabel(context: Context, entry: OpdsEntry, link: ReadableLink): String? {
+        val key = progressKey(entry, link)
+        val prefs = context.getSharedPreferences(PROGRESS_PREFS_NAME, Context.MODE_PRIVATE)
+        val pageCountKey = "${key}_page_count"
+        if (!prefs.contains(pageCountKey)) return null
+        val pageCount = prefs.getInt(pageCountKey, 0)
+        if (pageCount <= 0) return null
+        val pageIndex = prefs.getInt("${key}_page", 0).coerceIn(0, pageCount - 1)
+        return "${pageIndex + 1} / $pageCount"
     }
 
     fun downloadAndOpen(context: Context, entry: OpdsEntry, link: ReadableLink) {
@@ -329,14 +365,15 @@ class ComicViewModel(
     private fun loadFeed(
         targetUrl: String,
         replaceInputUrl: Boolean,
-        rememberSuccessfulConnection: Boolean
+        rememberSuccessfulConnection: Boolean,
+        statusMessage: String = "讀取 OPDS 中"
     ) {
         viewModelScope.launch {
             val attemptedUsername = _uiState.value.username
             val attemptedPassword = _uiState.value.password
             _uiState.value = _uiState.value.copy(
                 loadingFeed = true,
-                status = "讀取 OPDS 中",
+                status = statusMessage,
                 downloadingComic = false,
                 downloadProgress = null,
                 error = null
@@ -350,6 +387,11 @@ class ComicViewModel(
             }.onSuccess { feed ->
                 currentFeedUrl = targetUrl
                 navigator.updateFeedContext(targetUrl, feed.links)
+                val newSearchTemplate = resolveSearchTemplate()
+                if (!newSearchTemplate.isNullOrBlank()) {
+                    knownSearchTemplate = newSearchTemplate
+                }
+                navigator.updateSearchTemplate(newSearchTemplate ?: knownSearchTemplate)
                 _uiState.value = _uiState.value.copy(
                     opdsUrl = if (replaceInputUrl) targetUrl else _uiState.value.opdsUrl,
                     loadingFeed = false,
@@ -358,7 +400,9 @@ class ComicViewModel(
                     canGoBack = history.isNotEmpty(),
                     canGoNext = navigator.feedLink("next") != null,
                     canGoPrevious = navigator.feedLink("previous") != null || navigator.feedLink("prev") != null,
+                    canSearch = navigator.canSearch(),
                     status = "共 ${feed.entries.size} 筆",
+                    catalogPageLabel = catalogPageLabel(feed),
                     catalogVersion = ++catalogVersion,
                     successfulConnectionVersion = if (rememberSuccessfulConnection) {
                         connectionVersion += 1
@@ -378,6 +422,31 @@ class ComicViewModel(
                 )
             }
         }
+    }
+
+    private suspend fun resolveSearchTemplate(): String? {
+        navigator.directSearchTemplate()?.let { return it }
+        val descriptionUrl = navigator.searchDescriptionUrl() ?: return null
+        val template = runCatching {
+            repository.loadOpenSearchTemplate(
+                url = descriptionUrl,
+                username = _uiState.value.username,
+                password = _uiState.value.password
+            )
+        }.getOrNull()
+        return template?.let { navigator.resolveTemplate(descriptionUrl, it) }
+    }
+
+    private fun catalogPageLabel(feed: OpdsFeed): String {
+        val totalResults = feed.totalResults ?: return ""
+        val itemsPerPage = feed.itemsPerPage
+            ?.takeIf { it > 0 }
+            ?: feed.entries.size.takeIf { it > 0 }
+            ?: return ""
+        val totalPages = ((totalResults + itemsPerPage - 1) / itemsPerPage).coerceAtLeast(1)
+        val startIndex = feed.startIndex?.takeIf { it > 0 } ?: 1
+        val currentPage = (((startIndex - 1) / itemsPerPage) + 1).coerceIn(1, totalPages)
+        return "$currentPage / $totalPages"
     }
 
     private fun renderCurrentPage() {

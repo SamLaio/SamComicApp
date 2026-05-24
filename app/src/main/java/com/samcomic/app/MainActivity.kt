@@ -13,7 +13,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -77,6 +78,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -206,6 +208,8 @@ private fun CatalogScreen(
     val prefs = remember(context) { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val hasLoadedFeed = state.feedTitle.isNotBlank()
     var showConnectionPanel by rememberSaveable { mutableStateOf(true) }
+    var showSearchPanel by rememberSaveable { mutableStateOf(false) }
+    var searchText by rememberSaveable { mutableStateOf("") }
     val catalogListState = rememberLazyListState()
     val titleCollapseFraction = if (catalogListState.firstVisibleItemIndex > 0) {
         1f
@@ -216,6 +220,11 @@ private fun CatalogScreen(
     val expandedTitleHeight = if (shouldCollapseCatalogTitle) 112.dp else if (isLandscape) 40.dp else 64.dp
     val titleHeight = expandedTitleHeight * (1f - titleCollapseFraction)
     val catalogSpacing = if (isLandscape) 8.dp else 12.dp
+    val catalogPageText = if (state.loadingFeed) {
+        state.status
+    } else {
+        state.catalogPageLabel.ifBlank { state.status }
+    }
 
     LaunchedEffect(Unit) {
         val savedUrl = prefs.getString(KEY_LAST_OPDS_URL, "").orEmpty()
@@ -248,6 +257,13 @@ private fun CatalogScreen(
         catalogListState.scrollToItem(0)
     }
 
+    LaunchedEffect(state.canSearch) {
+        if (!state.canSearch) {
+            showSearchPanel = false
+            searchText = ""
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -267,6 +283,9 @@ private fun CatalogScreen(
                         if (shouldCollapseCatalogTitle && state.feedTitle.isNotBlank()) {
                             CatalogTitleRow(
                                 title = state.feedTitle,
+                                showSearch = state.canSearch,
+                                searchExpanded = showSearchPanel,
+                                onSearchToggle = { showSearchPanel = !showSearchPanel },
                                 showEdit = true,
                                 onEdit = { showConnectionPanel = !showConnectionPanel }
                             )
@@ -368,21 +387,36 @@ private fun CatalogScreen(
                 if (!shouldCollapseCatalogTitle && state.feedTitle.isNotBlank()) {
                     CatalogTitleRow(
                         title = state.feedTitle,
+                        showSearch = state.canSearch,
+                        searchExpanded = showSearchPanel,
+                        onSearchToggle = { showSearchPanel = !showSearchPanel },
                         showEdit = true,
                         onEdit = { showConnectionPanel = !showConnectionPanel }
                     )
                 }
-                CatalogNavigationRow(state = state, vm = vm, centerText = state.status)
+                CatalogNavigationRow(state = state, vm = vm, centerText = catalogPageText)
             }
         } else {
             if (!shouldCollapseCatalogTitle && state.feedTitle.isNotBlank()) {
                 CatalogTitleRow(
                     title = state.feedTitle,
+                    showSearch = state.canSearch,
+                    searchExpanded = showSearchPanel,
+                    onSearchToggle = { showSearchPanel = !showSearchPanel },
                     showEdit = true,
                     onEdit = { showConnectionPanel = !showConnectionPanel }
                 )
             }
-            CatalogNavigationRow(state = state, vm = vm, centerText = state.status)
+            CatalogNavigationRow(state = state, vm = vm, centerText = catalogPageText)
+        }
+
+        if (showSearchPanel && state.canSearch) {
+            CatalogSearchRow(
+                query = searchText,
+                onQueryChange = { searchText = it },
+                onSearch = { vm.searchCatalog(searchText) },
+                onClear = { searchText = "" }
+            )
         }
 
         Box(
@@ -390,21 +424,7 @@ private fun CatalogScreen(
         ) {
             LazyColumn(
                 state = catalogListState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(catalogListState) {
-                        while (true) {
-                            val wheelDeltaY = awaitPointerEventScope {
-                                val event = awaitPointerEvent()
-                                event.changes
-                                    .sumOf { it.scrollDelta.y.toDouble() }
-                                    .toFloat()
-                            }
-                            if (wheelDeltaY != 0f) {
-                                catalogListState.scrollBy(-wheelDeltaY)
-                            }
-                        }
-                    },
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -416,10 +436,14 @@ private fun CatalogScreen(
                     }
                 ) { _, entry ->
                     val readableLinks = vm.readableLinks(entry)
+                    val progressLabel = readableLinks.firstOrNull()?.let { link ->
+                        vm.readingProgressLabel(context, entry, link)
+                    }
                     EntryCard(
                         entry = entry,
                         canNavigate = vm.hasNavigation(entry),
                         readableLinks = readableLinks,
+                        progressLabel = progressLabel,
                         onNavigate = { vm.openNavigation(entry) },
                         onRead = { link -> vm.downloadAndOpen(context, entry, link) }
                     )
@@ -490,6 +514,9 @@ private fun CatalogScrollbar(
 @Composable
 private fun CatalogTitleRow(
     title: String,
+    showSearch: Boolean,
+    searchExpanded: Boolean,
+    onSearchToggle: () -> Unit,
     showEdit: Boolean,
     onEdit: () -> Unit
 ) {
@@ -505,10 +532,60 @@ private fun CatalogTitleRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
+        if (showSearch) {
+            IconButton(onClick = onSearchToggle) {
+                Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = if (searchExpanded) "收合搜尋" else "搜尋書本"
+                )
+            }
+        }
         if (showEdit) {
             IconButton(onClick = onEdit) {
                 Icon(Icons.Filled.Edit, contentDescription = "編輯 OPDS 設定")
             }
+        }
+    }
+}
+
+@Composable
+private fun CatalogSearchRow(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onClear: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            label = { Text("搜尋書本") },
+            singleLine = true,
+            leadingIcon = {
+                Icon(Icons.Filled.Search, contentDescription = null)
+            },
+            trailingIcon = {
+                if (query.isNotBlank()) {
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Filled.Close, contentDescription = "清除搜尋")
+                    }
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+            modifier = Modifier.weight(1f)
+        )
+        Button(
+            onClick = onSearch,
+            enabled = query.isNotBlank()
+        ) {
+            Icon(Icons.Filled.Search, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("搜尋")
         }
     }
 }
@@ -590,6 +667,7 @@ private fun EntryCard(
     entry: OpdsEntry,
     canNavigate: Boolean,
     readableLinks: List<ReadableLink>,
+    progressLabel: String?,
     onNavigate: () -> Unit,
     onRead: (ReadableLink) -> Unit
 ) {
@@ -610,8 +688,32 @@ private fun EntryCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            if (entry.author.isNotBlank() && entry.author != "Unknown" && !canNavigate) {
-                Text("作者：${entry.author}", style = MaterialTheme.typography.bodySmall)
+            val showAuthor = entry.author.isNotBlank() && entry.author != "Unknown" && !canNavigate
+            if (showAuthor || (!canNavigate && progressLabel != null)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (showAuthor) {
+                        Text(
+                            text = "作者：${entry.author}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (progressLabel != null) {
+                        Text(
+                            text = progressLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
             if (entry.summary.isNotBlank()) {
                 Text(

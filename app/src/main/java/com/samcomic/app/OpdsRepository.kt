@@ -7,8 +7,11 @@ import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 import java.io.File
 import java.net.URLDecoder
+import java.io.StringReader
 
 class OpdsRepository(
     private val client: OkHttpClient = OkHttpClient(),
@@ -21,6 +24,10 @@ class OpdsRepository(
             error("回傳的是 HTML，請輸入 OPDS Feed URL")
         }
         parser.parse(xml)
+    }
+
+    suspend fun loadOpenSearchTemplate(url: String, username: String, password: String): String? = withContext(Dispatchers.IO) {
+        parseOpenSearchTemplate(fetchText(url, username, password))
     }
 
     suspend fun downloadComic(
@@ -161,5 +168,29 @@ class OpdsRepository(
             .replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .trim()
             .ifBlank { "comic" }
+    }
+
+    private fun parseOpenSearchTemplate(xml: String): String? {
+        val parser = XmlPullParserFactory.newInstance().apply {
+            isNamespaceAware = true
+        }.newPullParser()
+        parser.setInput(StringReader(xml))
+
+        var fallbackTemplate: String? = null
+        var eventType = parser.eventType
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            if (eventType == XmlPullParser.START_TAG && parser.name == "Url") {
+                val template = parser.getAttributeValue(null, "template").orEmpty()
+                val type = parser.getAttributeValue(null, "type").orEmpty().lowercase()
+                if (template.contains("{searchTerms", ignoreCase = true)) {
+                    if (type.contains("atom") || type.contains("opds") || type.contains("xml")) {
+                        return template
+                    }
+                    if (fallbackTemplate == null) fallbackTemplate = template
+                }
+            }
+            eventType = parser.next()
+        }
+        return fallbackTemplate
     }
 }
