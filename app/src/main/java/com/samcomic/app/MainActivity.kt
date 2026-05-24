@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -806,32 +807,47 @@ private fun ReaderScreen(
             .background(Color.Black)
     ) {
         if (showReaderToolbar) {
-            Row(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                IconButton(onClick = vm::closeReader) {
-                    Icon(Icons.Filled.Close, contentDescription = "關閉")
-                }
-                Text(
-                    text = document.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = pageLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.clickable {
-                        pageInput = (state.pageIndex + 1).toString()
-                        showPageJumpDialog = true
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IconButton(onClick = vm::closeReader) {
+                        Icon(Icons.Filled.Close, contentDescription = "關閉")
                     }
-                )
+                    Text(
+                        text = document.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ReaderPageTools(
+                        pageLabel = pageLabel,
+                        showOrderToggle = state.showTwoPages,
+                        reverseTwoPageOrder = state.reverseTwoPageOrder,
+                        onToggleOrder = vm::toggleTwoPageOrder,
+                        onPageClick = {
+                            pageInput = (state.pageIndex + 1).toString()
+                            showPageJumpDialog = true
+                        }
+                    )
+                }
+                if (state.showTwoPages) {
+                    IconButton(
+                        onClick = { vm.advanceOnePage(context) },
+                        enabled = !state.loadingReader && state.pageIndex < document.pageCount - 1,
+                        modifier = Modifier.align(Alignment.Center)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "對開前進一頁")
+                    }
+                }
             }
         }
 
@@ -860,18 +876,28 @@ private fun ReaderScreen(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "漫畫左頁",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            alignment = Alignment.CenterEnd
-                        )
-                        if (secondBitmap != null) {
+                        val leftBitmap = if (state.reverseTwoPageOrder) secondBitmap else bitmap
+                        val rightBitmap = if (state.reverseTwoPageOrder) bitmap else secondBitmap
+                        if (leftBitmap != null) {
                             Image(
-                                bitmap = secondBitmap.asImageBitmap(),
+                                bitmap = leftBitmap.asImageBitmap(),
+                                contentDescription = "漫畫左頁",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                alignment = Alignment.CenterEnd
+                            )
+                        } else {
+                            Spacer(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            )
+                        }
+                        if (rightBitmap != null) {
+                            Image(
+                                bitmap = rightBitmap.asImageBitmap(),
                                 contentDescription = "漫畫右頁",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
@@ -900,17 +926,19 @@ private fun ReaderScreen(
                 CircularProgressIndicator()
             }
             if (!showReaderToolbar) {
-                Text(
-                    text = pageLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White,
+                ReaderPageTools(
+                    pageLabel = pageLabel,
+                    showOrderToggle = state.showTwoPages,
+                    reverseTwoPageOrder = state.reverseTwoPageOrder,
+                    onToggleOrder = vm::toggleTwoPageOrder,
+                    onPageClick = {
+                        pageInput = (state.pageIndex + 1).toString()
+                        showPageJumpDialog = true
+                    },
+                    textColor = Color.White,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .background(Color.Black.copy(alpha = 0.55f))
-                        .clickable {
-                            pageInput = (state.pageIndex + 1).toString()
-                            showPageJumpDialog = true
-                        }
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
@@ -957,6 +985,39 @@ private fun ReaderScreen(
                     Text("確認")
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun ReaderPageTools(
+    pageLabel: String,
+    showOrderToggle: Boolean,
+    reverseTwoPageOrder: Boolean,
+    onToggleOrder: () -> Unit,
+    onPageClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    textColor: Color = Color.Unspecified
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (showOrderToggle) {
+            IconButton(onClick = onToggleOrder) {
+                Icon(
+                    imageVector = Icons.Filled.SwapHoriz,
+                    contentDescription = if (reverseTwoPageOrder) "切換為 1-2 對開順序" else "切換為 2-1 對開順序",
+                    tint = textColor
+                )
+            }
+        }
+        Text(
+            text = pageLabel,
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor,
+            modifier = Modifier.clickable(onClick = onPageClick)
         )
     }
 }

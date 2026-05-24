@@ -46,7 +46,8 @@ data class ComicUiState(
     val pageIndex: Int = 0,
     val pageBitmap: Bitmap? = null,
     val secondPageBitmap: Bitmap? = null,
-    val showTwoPages: Boolean = false
+    val showTwoPages: Boolean = false,
+    val reverseTwoPageOrder: Boolean = false
 )
 
 class ComicViewModel(
@@ -315,6 +316,17 @@ class ComicViewModel(
         }
     }
 
+    fun advanceOnePage(context: Context) {
+        val document = _uiState.value.document ?: return
+        if (!_uiState.value.showTwoPages) return
+        val next = (_uiState.value.pageIndex + 1).coerceAtMost(document.pageCount - 1)
+        if (next != _uiState.value.pageIndex) {
+            _uiState.value = _uiState.value.copy(pageIndex = next)
+            saveReadingProgress(context.applicationContext, next, document.pageCount)
+            renderCurrentPage()
+        }
+    }
+
     fun goToPage(context: Context, displayPage: Int) {
         val document = _uiState.value.document ?: return
         val target = (displayPage - 1).coerceIn(0, document.pageCount - 1)
@@ -341,6 +353,13 @@ class ComicViewModel(
         renderCurrentPage()
     }
 
+    fun toggleTwoPageOrder() {
+        if (!_uiState.value.showTwoPages) return
+        _uiState.value = _uiState.value.copy(
+            reverseTwoPageOrder = !_uiState.value.reverseTwoPageOrder
+        )
+    }
+
     fun closeReader() {
         renderJob?.cancel()
         _uiState.value.pageBitmap?.recycle()
@@ -352,6 +371,7 @@ class ComicViewModel(
             pageIndex = 0,
             loadingReader = false,
             downloadingComic = false,
+            reverseTwoPageOrder = false,
             status = "",
             downloadProgress = null
         )
