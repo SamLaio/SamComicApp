@@ -405,34 +405,13 @@ class ComicViewModel(
                     password = _uiState.value.password
                 )
             }.onSuccess { feed ->
-                currentFeedUrl = targetUrl
-                navigator.updateFeedContext(targetUrl, feed.links)
-                val newSearchTemplate = resolveSearchTemplate()
-                if (!newSearchTemplate.isNullOrBlank()) {
-                    knownSearchTemplate = newSearchTemplate
-                }
-                navigator.updateSearchTemplate(newSearchTemplate ?: knownSearchTemplate)
-                _uiState.value = _uiState.value.copy(
-                    opdsUrl = if (replaceInputUrl) targetUrl else _uiState.value.opdsUrl,
-                    loadingFeed = false,
-                    feedTitle = feed.title,
-                    entries = feed.entries,
-                    canGoBack = history.isNotEmpty(),
-                    canGoNext = navigator.feedLink("next") != null,
-                    canGoPrevious = navigator.feedLink("previous") != null || navigator.feedLink("prev") != null,
-                    canSearch = navigator.canSearch(),
-                    status = "共 ${feed.entries.size} 筆",
-                    catalogPageLabel = catalogPageLabel(feed),
-                    catalogVersion = ++catalogVersion,
-                    successfulConnectionVersion = if (rememberSuccessfulConnection) {
-                        connectionVersion += 1
-                        connectionVersion
-                    } else {
-                        _uiState.value.successfulConnectionVersion
-                    },
-                    successfulOpdsUrl = if (rememberSuccessfulConnection) targetUrl else _uiState.value.successfulOpdsUrl,
-                    successfulUsername = if (rememberSuccessfulConnection) attemptedUsername else _uiState.value.successfulUsername,
-                    successfulPassword = if (rememberSuccessfulConnection) attemptedPassword else _uiState.value.successfulPassword
+                applyLoadedFeed(
+                    targetUrl = targetUrl,
+                    feed = feed,
+                    replaceInputUrl = replaceInputUrl,
+                    rememberSuccessfulConnection = rememberSuccessfulConnection,
+                    attemptedUsername = attemptedUsername,
+                    attemptedPassword = attemptedPassword
                 )
             }.onFailure { ex ->
                 _uiState.value = _uiState.value.copy(
@@ -442,6 +421,45 @@ class ComicViewModel(
                 )
             }
         }
+    }
+
+    private suspend fun applyLoadedFeed(
+        targetUrl: String,
+        feed: OpdsFeed,
+        replaceInputUrl: Boolean,
+        rememberSuccessfulConnection: Boolean,
+        attemptedUsername: String,
+        attemptedPassword: String
+    ) {
+        currentFeedUrl = targetUrl
+        navigator.updateFeedContext(targetUrl, feed.links)
+        val newSearchTemplate = resolveSearchTemplate()
+        if (!newSearchTemplate.isNullOrBlank()) {
+            knownSearchTemplate = newSearchTemplate
+        }
+        navigator.updateSearchTemplate(newSearchTemplate ?: knownSearchTemplate)
+        _uiState.value = _uiState.value.copy(
+            opdsUrl = if (replaceInputUrl) targetUrl else _uiState.value.opdsUrl,
+            loadingFeed = false,
+            feedTitle = feed.title,
+            entries = feed.entries,
+            canGoBack = history.isNotEmpty(),
+            canGoNext = navigator.feedLink("next") != null,
+            canGoPrevious = navigator.feedLink("previous") != null || navigator.feedLink("prev") != null,
+            canSearch = navigator.canSearch(),
+            status = "共 ${feed.entries.size} 筆",
+            catalogPageLabel = catalogPageLabel(feed),
+            catalogVersion = ++catalogVersion,
+            successfulConnectionVersion = if (rememberSuccessfulConnection) {
+                connectionVersion += 1
+                connectionVersion
+            } else {
+                _uiState.value.successfulConnectionVersion
+            },
+            successfulOpdsUrl = if (rememberSuccessfulConnection) targetUrl else _uiState.value.successfulOpdsUrl,
+            successfulUsername = if (rememberSuccessfulConnection) attemptedUsername else _uiState.value.successfulUsername,
+            successfulPassword = if (rememberSuccessfulConnection) attemptedPassword else _uiState.value.successfulPassword
+        )
     }
 
     private suspend fun resolveSearchTemplate(): String? {
@@ -522,15 +540,88 @@ class ComicViewModel(
         }
     }
 
+    private fun buildReadQueue(entries: List<OpdsEntry>): List<QueuedComic> {
+        return entries.mapNotNull { entry ->
+            navigator.readableLinks(entry).firstOrNull()?.let { link ->
+                QueuedComic(entry = entry, link = link)
+            }
+        }
+    }
+
     private fun openNextQueuedComic(context: Context) {
         val nextIndex = readQueueIndex + 1
         val next = readQueue.getOrNull(nextIndex)
-        if (next == null) {
+        if (next != null) {
+            readQueueIndex = nextIndex
+            downloadAndOpenQueued(context, next.entry, next.link)
+            return
+        }
+
+        val firstNextFeedUrl = navigator.feedLink("next")
+        if (firstNextFeedUrl == null) {
             _uiState.value = _uiState.value.copy(status = "已到最後一本")
             return
         }
-        readQueueIndex = nextIndex
-        downloadAndOpenQueued(context, next.entry, next.link)
+
+        viewModelScope.launch {
+            val attemptedUsername = _uiState.value.username
+            val attemptedPassword = _uiState.value.password
+            _uiState.value = _uiState.value.copy(
+                loadingReader = true,
+                downloadingComic = false,
+                status = "讀取下一頁 OPDS 中",
+                downloadProgress = null,
+                error = null
+            )
+
+            runCatching {
+                var nextFeedUrl: String? = firstNextFeedUrl
+                val visitedFeedUrls = mutableSetOf<String>()
+                while (!nextFeedUrl.isNullOrBlank() && visitedFeedUrls.add(nextFeedUrl)) {
+                    val feedUrl = nextFeedUrl
+                    val feed = repository.loadFeed(
+                        url = feedUrl,
+                        username = attemptedUsername,
+                        password = attemptedPassword
+                    )
+                    applyLoadedFeed(
+                        targetUrl = feedUrl,
+                        feed = feed,
+                        replaceInputUrl = false,
+                        rememberSuccessfulConnection = false,
+                        attemptedUsername = attemptedUsername,
+                        attemptedPassword = attemptedPassword
+                    )
+                    val nextPageQueue = buildReadQueue(feed.entries)
+                    if (nextPageQueue.isNotEmpty()) {
+                        readQueue = nextPageQueue
+                        readQueueIndex = 0
+                        return@runCatching nextPageQueue.first()
+                    }
+                    nextFeedUrl = navigator.feedLink("next")
+                }
+                null
+            }.onSuccess { queuedComic ->
+                if (queuedComic == null) {
+                    _uiState.value = _uiState.value.copy(
+                        loadingReader = false,
+                        downloadingComic = false,
+                        status = "已到最後一本",
+                        downloadProgress = null
+                    )
+                    return@onSuccess
+                }
+                downloadAndOpenQueued(context, queuedComic.entry, queuedComic.link)
+            }.onFailure { ex ->
+                _uiState.value = _uiState.value.copy(
+                    loadingReader = false,
+                    downloadingComic = false,
+                    status = "",
+                    downloadProgress = null,
+                    error = ex.message ?: "讀取下一頁 OPDS 失敗"
+                )
+            }
+        }
     }
 
     private fun openPreviousQueuedComic(context: Context) {
