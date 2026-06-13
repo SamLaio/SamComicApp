@@ -1,5 +1,7 @@
 .gradle/
 .idea/
+AGENTS.md
+agents
 local.properties
 build/
 app/build/
