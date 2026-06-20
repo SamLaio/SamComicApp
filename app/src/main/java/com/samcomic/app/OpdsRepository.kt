@@ -64,24 +64,40 @@ class OpdsRepository(
                 extensionHint = link.extensionHint
             )
             val target = File(workDir, fileName)
-            body.byteStream().use { input ->
-                target.outputStream().buffered().use { output ->
-                    val totalBytes = body.contentLength()
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var downloadedBytes = 0L
-                    var lastProgressEmit = 0L
-                    onProgress(0L, totalBytes)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        downloadedBytes += read
-                        val now = System.currentTimeMillis()
-                        if (now - lastProgressEmit > 160L || downloadedBytes == totalBytes) {
-                            onProgress(downloadedBytes, totalBytes)
-                            lastProgressEmit = now
+            val temp = File(workDir, "$fileName.download")
+            target.delete()
+            temp.delete()
+
+            try {
+                val totalBytes = body.contentLength()
+                var downloadedBytes = 0L
+                body.byteStream().use { input ->
+                    temp.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var lastProgressEmit = 0L
+                        onProgress(0L, totalBytes)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            output.write(buffer, 0, read)
+                            downloadedBytes += read
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressEmit > 160L || downloadedBytes == totalBytes) {
+                                onProgress(downloadedBytes, totalBytes)
+                                lastProgressEmit = now
+                            }
                         }
                     }
+                }
+                if (totalBytes > 0L && downloadedBytes != totalBytes) {
+                    error("下載不完整，請重新下載")
+                }
+                if (!temp.renameTo(target)) {
+                    error("無法完成下載檔案寫入")
+                }
+            } finally {
+                if (temp.exists()) {
+                    temp.delete()
                 }
             }
             target

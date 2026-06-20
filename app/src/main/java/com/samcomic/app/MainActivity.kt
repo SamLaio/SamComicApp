@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
@@ -84,6 +85,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
@@ -94,6 +96,9 @@ private const val KEY_LAST_PASSWORD = "last_password"
 
 class MainActivity : ComponentActivity() {
     private var externalOpenRequest by mutableStateOf<ExternalOpenRequest?>(null)
+    private val vm: ComicViewModel by lazy {
+        ViewModelProvider(this)[ComicViewModel::class.java]
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,10 +106,31 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SamComicApp(externalOpenRequest = externalOpenRequest)
+                    SamComicApp(externalOpenRequest = externalOpenRequest, vm = vm)
                 }
             }
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val state = vm.uiState.value
+        if (state.document != null) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !state.loadingReader) {
+                        vm.nextPage(applicationContext)
+                    }
+                    return true
+                }
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !state.loadingReader) {
+                        vm.previousPage(applicationContext)
+                    }
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onNewIntent(intent: Intent) {
