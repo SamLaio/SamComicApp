@@ -156,6 +156,10 @@ private fun SamComicApp(
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val catalogListState = rememberLazyListState()
+    var showConnectionPanel by rememberSaveable { mutableStateOf(true) }
+    var showSearchPanel by rememberSaveable { mutableStateOf(false) }
+    var searchText by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(externalOpenRequest?.token) {
         val request = externalOpenRequest ?: return@LaunchedEffect
@@ -173,7 +177,17 @@ private fun SamComicApp(
                 .padding(padding)
         ) {
             if (state.document == null) {
-                CatalogScreen(state = state, vm = vm)
+                CatalogScreen(
+                    state = state,
+                    vm = vm,
+                    catalogListState = catalogListState,
+                    showConnectionPanel = showConnectionPanel,
+                    onShowConnectionPanelChange = { showConnectionPanel = it },
+                    showSearchPanel = showSearchPanel,
+                    onShowSearchPanelChange = { showSearchPanel = it },
+                    searchText = searchText,
+                    onSearchTextChange = { searchText = it }
+                )
             } else {
                 ReaderScreen(state = state, vm = vm)
             }
@@ -227,17 +241,20 @@ private fun Intent.externalFileUri(): Uri? {
 @Composable
 private fun CatalogScreen(
     state: ComicUiState,
-    vm: ComicViewModel
+    vm: ComicViewModel,
+    catalogListState: LazyListState,
+    showConnectionPanel: Boolean,
+    onShowConnectionPanelChange: (Boolean) -> Unit,
+    showSearchPanel: Boolean,
+    onShowSearchPanelChange: (Boolean) -> Unit,
+    searchText: String,
+    onSearchTextChange: (String) -> Unit
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val prefs = remember(context) { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val hasLoadedFeed = state.feedTitle.isNotBlank()
-    var showConnectionPanel by rememberSaveable { mutableStateOf(true) }
-    var showSearchPanel by rememberSaveable { mutableStateOf(false) }
-    var searchText by rememberSaveable { mutableStateOf("") }
-    val catalogListState = rememberLazyListState()
     val titleCollapseFraction = if (catalogListState.firstVisibleItemIndex > 0) {
         1f
     } else {
@@ -264,9 +281,9 @@ private fun CatalogScreen(
         }
     }
 
-    LaunchedEffect(hasLoadedFeed, state.loadingFeed) {
-        if (hasLoadedFeed && !state.loadingFeed) {
-            showConnectionPanel = false
+    LaunchedEffect(state.catalogVersion) {
+        if (hasLoadedFeed) {
+            onShowConnectionPanelChange(false)
         }
     }
 
@@ -286,8 +303,8 @@ private fun CatalogScreen(
 
     LaunchedEffect(state.canSearch) {
         if (!state.canSearch) {
-            showSearchPanel = false
-            searchText = ""
+            onShowSearchPanelChange(false)
+            onSearchTextChange("")
         }
     }
 
@@ -312,9 +329,9 @@ private fun CatalogScreen(
                                 title = state.feedTitle,
                                 showSearch = state.canSearch,
                                 searchExpanded = showSearchPanel,
-                                onSearchToggle = { showSearchPanel = !showSearchPanel },
+                                onSearchToggle = { onShowSearchPanelChange(!showSearchPanel) },
                                 showEdit = true,
-                                onEdit = { showConnectionPanel = !showConnectionPanel }
+                                onEdit = { onShowConnectionPanelChange(!showConnectionPanel) }
                             )
                         }
                     }
@@ -416,9 +433,9 @@ private fun CatalogScreen(
                         title = state.feedTitle,
                         showSearch = state.canSearch,
                         searchExpanded = showSearchPanel,
-                        onSearchToggle = { showSearchPanel = !showSearchPanel },
+                        onSearchToggle = { onShowSearchPanelChange(!showSearchPanel) },
                         showEdit = true,
-                        onEdit = { showConnectionPanel = !showConnectionPanel }
+                        onEdit = { onShowConnectionPanelChange(!showConnectionPanel) }
                     )
                 }
                 CatalogNavigationRow(state = state, vm = vm, centerText = catalogPageText)
@@ -429,9 +446,9 @@ private fun CatalogScreen(
                     title = state.feedTitle,
                     showSearch = state.canSearch,
                     searchExpanded = showSearchPanel,
-                    onSearchToggle = { showSearchPanel = !showSearchPanel },
+                    onSearchToggle = { onShowSearchPanelChange(!showSearchPanel) },
                     showEdit = true,
-                    onEdit = { showConnectionPanel = !showConnectionPanel }
+                    onEdit = { onShowConnectionPanelChange(!showConnectionPanel) }
                 )
             }
             CatalogNavigationRow(state = state, vm = vm, centerText = catalogPageText)
@@ -440,9 +457,9 @@ private fun CatalogScreen(
         if (showSearchPanel && state.canSearch) {
             CatalogSearchRow(
                 query = searchText,
-                onQueryChange = { searchText = it },
+                onQueryChange = onSearchTextChange,
                 onSearch = { vm.searchCatalog(searchText) },
-                onClear = { searchText = "" }
+                onClear = { onSearchTextChange("") }
             )
         }
 
