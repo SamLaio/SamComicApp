@@ -38,13 +38,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -181,6 +181,8 @@ private fun SamComicApp(
                     state = state,
                     vm = vm,
                     catalogListState = catalogListState,
+                    downloadedComicKeys = state.downloadedComicKeys,
+                    cacheKeyOf = vm::downloadCacheKey,
                     showConnectionPanel = showConnectionPanel,
                     onShowConnectionPanelChange = { showConnectionPanel = it },
                     showSearchPanel = showSearchPanel,
@@ -243,6 +245,8 @@ private fun CatalogScreen(
     state: ComicUiState,
     vm: ComicViewModel,
     catalogListState: LazyListState,
+    downloadedComicKeys: Set<String>,
+    cacheKeyOf: (OpdsEntry, ReadableLink) -> String,
     showConnectionPanel: Boolean,
     onShowConnectionPanelChange: (Boolean) -> Unit,
     showSearchPanel: Boolean,
@@ -295,6 +299,10 @@ private fun CatalogScreen(
                 putString(KEY_LAST_PASSWORD, state.successfulPassword)
             }
         }
+    }
+
+    LaunchedEffect(state.document, state.catalogVersion) {
+        vm.refreshDownloadedComicKeys(context)
     }
 
     LaunchedEffect(state.catalogVersion) {
@@ -488,6 +496,8 @@ private fun CatalogScreen(
                         canNavigate = vm.hasNavigation(entry),
                         readableLinks = readableLinks,
                         progressLabel = progressLabel,
+                        downloadedComicKeys = downloadedComicKeys,
+                        cacheKeyOf = cacheKeyOf,
                         onNavigate = { vm.openNavigation(entry) },
                         onRead = { link -> vm.downloadAndOpen(context, entry, link) }
                     )
@@ -712,6 +722,8 @@ private fun EntryCard(
     canNavigate: Boolean,
     readableLinks: List<ReadableLink>,
     progressLabel: String?,
+    downloadedComicKeys: Set<String>,
+    cacheKeyOf: (OpdsEntry, ReadableLink) -> String,
     onNavigate: () -> Unit,
     onRead: (ReadableLink) -> Unit
 ) {
@@ -782,20 +794,15 @@ private fun EntryCard(
                     }
                 }
                 readableLinks.forEach { link ->
+                    val isDownloaded = downloadedComicKeys.contains(cacheKeyOf(entry, link))
                     Button(
                         onClick = { onRead(link) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(
-                            imageVector = if (link.extensionHint == "pdf") {
-                                Icons.Filled.PictureAsPdf
-                            } else {
-                                Icons.Filled.Archive
-                            },
-                            contentDescription = null
+                            imageVector = if (isDownloaded) Icons.Filled.Visibility else Icons.Filled.Download,
+                            contentDescription = if (isDownloaded) "View" else "Download"
                         )
-                        Spacer(Modifier.size(8.dp))
-                        Text(link.label)
                     }
                 }
             }

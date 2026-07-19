@@ -47,7 +47,8 @@ data class ComicUiState(
     val pageBitmap: Bitmap? = null,
     val secondPageBitmap: Bitmap? = null,
     val showTwoPages: Boolean = false,
-    val reverseTwoPageOrder: Boolean = false
+    val reverseTwoPageOrder: Boolean = false,
+    val downloadedComicKeys: Set<String> = emptySet()
 )
 
 class ComicViewModel(
@@ -66,6 +67,7 @@ class ComicViewModel(
     private var readQueueIndex: Int = -1
     private var activeProgress: ActiveReadingProgress? = null
     private var knownSearchTemplate: String? = null
+    private var currentDownloadedComicKey: String? = null
 
     fun updateOpdsUrl(value: String) {
         _uiState.value = _uiState.value.copy(opdsUrl = value)
@@ -174,9 +176,21 @@ class ComicViewModel(
         downloadAndOpenQueued(context.applicationContext, entry, link)
     }
 
+    fun downloadCacheKey(entry: OpdsEntry, link: ReadableLink): String {
+        return progressKey(entry, link)
+    }
+
+    fun refreshDownloadedComicKeys(context: Context) {
+        viewModelScope.launch {
+            val keys = repository.scanDownloadedComicKeys(context.applicationContext, currentDownloadedComicKey)
+            _uiState.value = _uiState.value.copy(downloadedComicKeys = keys)
+        }
+    }
+
     fun openExternalFile(context: Context, uri: Uri, mimeType: String?) {
         readQueue = emptyList()
         readQueueIndex = -1
+        currentDownloadedComicKey = null
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 loadingReader = true,
@@ -229,8 +243,14 @@ class ComicViewModel(
                 error = null
             )
             runCatching {
-                val file = repository.downloadComic(
+                val cacheKey = downloadCacheKey(entry, link)
+                val file = repository.cachedDownloadFile(
                     context = context.applicationContext,
+                    cacheKey = cacheKey,
+                    skipCacheKey = currentDownloadedComicKey
+                ) ?: repository.downloadComic(
+                    context = context.applicationContext,
+                    cacheKey = cacheKey,
                     link = link,
                     title = entry.title,
                     username = _uiState.value.username,
@@ -248,10 +268,13 @@ class ComicViewModel(
                     )
                 }
                 _uiState.value = _uiState.value.copy(status = "準備開啟：${entry.title}")
-                comicCache.open(file, entry.title)
-            }.onSuccess { document ->
+                val document = comicCache.open(file, entry.title)
+                Triple(cacheKey, document, file)
+            }.onSuccess { result ->
+                val (cacheKey, document, file) = result
                 val progressKey = progressKey(entry, link)
                 val restoredPage = loadSavedPage(context, progressKey, document.pageCount)
+                currentDownloadedComicKey = cacheKey
                 activeProgress = ActiveReadingProgress(
                     key = progressKey,
                     title = entry.title
@@ -264,6 +287,8 @@ class ComicViewModel(
                     document = document,
                     pageIndex = restoredPage
                 )
+                repository.touchDownloadedComic(file)
+                refreshDownloadedComicKeys(context.applicationContext)
                 saveReadingProgress(context, restoredPage, document.pageCount)
                 renderCurrentPage()
             }.onFailure { ex ->
@@ -376,6 +401,7 @@ class ComicViewModel(
             downloadProgress = null
         )
         activeProgress = null
+        currentDownloadedComicKey = null
     }
 
     fun clearError() {

@@ -17,6 +17,8 @@ class OpdsRepository(
     private val client: OkHttpClient = OkHttpClient(),
     private val parser: OpdsParser = OpdsParser()
 ) {
+    private val downloadCacheDirName = "sam-comic/downloads"
+
     suspend fun loadFeed(url: String, username: String, password: String): OpdsFeed = withContext(Dispatchers.IO) {
         val xml = fetchText(url, username, password)
         val head = xml.trimStart().take(200).lowercase()
@@ -32,13 +34,14 @@ class OpdsRepository(
 
     suspend fun downloadComic(
         context: Context,
+        cacheKey: String,
         link: ReadableLink,
         title: String,
         username: String,
         password: String,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        val workDir = File(context.cacheDir, "sam-comic/current")
+        val workDir = downloadWorkDir(context, cacheKey)
         workDir.deleteRecursively()
         workDir.mkdirs()
 
@@ -95,6 +98,8 @@ class OpdsRepository(
                 if (!temp.renameTo(target)) {
                     error("無法完成下載檔案寫入")
                 }
+                workDir.setLastModified(System.currentTimeMillis())
+                target.setLastModified(System.currentTimeMillis())
             } finally {
                 if (temp.exists()) {
                     temp.delete()
@@ -102,6 +107,56 @@ class OpdsRepository(
             }
             target
         }
+    }
+
+    suspend fun cachedDownloadFile(context: Context, cacheKey: String, skipCacheKey: String? = null): File? = withContext(Dispatchers.IO) {
+        cleanupDownloadedComics(context, skipCacheKey)
+        val workDir = downloadWorkDir(context, cacheKey)
+        val file = workDir.listFiles()
+            ?.filter { it.isFile && !it.name.endsWith(".download") }
+            ?.maxByOrNull { it.lastModified() }
+        if (file != null) {
+            touchDownloadedComic(file)
+        }
+        file
+    }
+
+    suspend fun scanDownloadedComicKeys(context: Context, skipCacheKey: String? = null): Set<String> = withContext(Dispatchers.IO) {
+        cleanupDownloadedComics(context, skipCacheKey)
+        downloadBaseDir(context).listFiles()
+            ?.asSequence()
+            ?.filter { it.isDirectory }
+            ?.filter { dir -> dir.listFiles()?.any { it.isFile && !it.name.endsWith(".download") } == true }
+            ?.map { it.name }
+            ?.toSet()
+            .orEmpty()
+    }
+
+    fun touchDownloadedComic(file: File) {
+        val dir = file.parentFile ?: return
+        val now = System.currentTimeMillis()
+        file.setLastModified(now)
+        dir.setLastModified(now)
+    }
+
+    private fun cleanupDownloadedComics(context: Context, skipCacheKey: String? = null) {
+        val baseDir = downloadBaseDir(context)
+        if (!baseDir.exists()) return
+        val now = System.currentTimeMillis()
+        baseDir.listFiles()?.forEach { dir ->
+            if (!dir.isDirectory || dir.name == skipCacheKey) return@forEach
+            if (now - dir.lastModified() > DOWNLOAD_CACHE_TTL_MILLIS) {
+                dir.deleteRecursively()
+            }
+        }
+    }
+
+    private fun downloadBaseDir(context: Context): File {
+        return File(context.cacheDir, downloadCacheDirName)
+    }
+
+    private fun downloadWorkDir(context: Context, cacheKey: String): File {
+        return File(downloadBaseDir(context), cacheKey)
     }
 
     private fun fetchText(url: String, username: String, password: String): String {
@@ -208,5 +263,9 @@ class OpdsRepository(
             eventType = parser.next()
         }
         return fallbackTemplate
+    }
+
+    private companion object {
+        private const val DOWNLOAD_CACHE_TTL_MILLIS = 7L * 24L * 60L * 60L * 1000L
     }
 }
