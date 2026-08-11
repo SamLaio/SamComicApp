@@ -58,6 +58,21 @@ class OpdsNavigator {
         }.distinctBy { it.url }
     }
 
+    fun coverImageUrl(entry: OpdsEntry): String? {
+        val link = entry.links.firstOrNull { candidate ->
+            val type = candidate.type.lowercase()
+            val rel = candidate.rel.lowercase()
+            type.startsWith("image/") && (
+                rel.contains("thumbnail") ||
+                    rel.contains("image") ||
+                    rel.contains("cover")
+            )
+        } ?: entry.links.firstOrNull { candidate ->
+            candidate.type.lowercase().startsWith("image/")
+        }
+        return link?.let { resolveFromCurrent(it.href).ifBlank { null } }
+    }
+
     fun feedLink(rel: String): String? {
         val link = currentFeedLinks.firstOrNull { it.rel.contains(rel, ignoreCase = true) } ?: return null
         return resolveFromCurrent(link.href).ifBlank { null }

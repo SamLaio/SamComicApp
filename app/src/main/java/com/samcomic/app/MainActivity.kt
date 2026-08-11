@@ -3,6 +3,7 @@ package com.samcomic.app
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
@@ -66,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -488,6 +490,7 @@ private fun CatalogScreen(
                     }
                 ) { _, entry ->
                     val readableLinks = vm.readableLinks(entry)
+                    val coverImageUrl = vm.coverImageUrl(entry)
                     val progressLabel = readableLinks.firstOrNull()?.let { link ->
                         vm.readingProgressLabel(context, entry, link)
                     }
@@ -495,6 +498,10 @@ private fun CatalogScreen(
                         entry = entry,
                         canNavigate = vm.hasNavigation(entry),
                         readableLinks = readableLinks,
+                        coverImageUrl = coverImageUrl,
+                        username = state.username,
+                        password = state.password,
+                        loadCoverBitmap = vm::loadCoverBitmap,
                         progressLabel = progressLabel,
                         downloadedComicKeys = downloadedComicKeys,
                         cacheKeyOf = cacheKeyOf,
@@ -721,6 +728,10 @@ private fun EntryCard(
     entry: OpdsEntry,
     canNavigate: Boolean,
     readableLinks: List<ReadableLink>,
+    coverImageUrl: String?,
+    username: String,
+    password: String,
+    loadCoverBitmap: suspend (String, String, String) -> Bitmap?,
     progressLabel: String?,
     downloadedComicKeys: Set<String>,
     cacheKeyOf: (OpdsEntry, ReadableLink) -> String,
@@ -738,73 +749,164 @@ private fun EntryCard(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = entry.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            val showAuthor = entry.author.isNotBlank() && entry.author != "Unknown" && !canNavigate
-            if (showAuthor || (!canNavigate && progressLabel != null)) {
+            if (!coverImageUrl.isNullOrBlank()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top
                 ) {
-                    if (showAuthor) {
-                        Text(
-                            text = "作者：${entry.author}",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                    }
-                    if (progressLabel != null) {
-                        Text(
-                            text = progressLabel,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1
+                    EntryCoverThumbnail(
+                        coverImageUrl = coverImageUrl,
+                        username = username,
+                        password = password,
+                        loadCoverBitmap = loadCoverBitmap
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        EntryCardBody(
+                            entry = entry,
+                            canNavigate = canNavigate,
+                            readableLinks = readableLinks,
+                            progressLabel = progressLabel,
+                            downloadedComicKeys = downloadedComicKeys,
+                            cacheKeyOf = cacheKeyOf,
+                            onNavigate = onNavigate,
+                            onRead = onRead
                         )
                     }
                 }
-            }
-            if (entry.summary.isNotBlank()) {
-                Text(
-                    text = entry.summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
+            } else {
+                EntryCardBody(
+                    entry = entry,
+                    canNavigate = canNavigate,
+                    readableLinks = readableLinks,
+                    progressLabel = progressLabel,
+                    downloadedComicKeys = downloadedComicKeys,
+                    cacheKeyOf = cacheKeyOf,
+                    onNavigate = onNavigate,
+                    onRead = onRead
                 )
             }
+        }
+    }
+}
 
-            Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+@Composable
+private fun EntryCardBody(
+    entry: OpdsEntry,
+    canNavigate: Boolean,
+    readableLinks: List<ReadableLink>,
+    progressLabel: String?,
+    downloadedComicKeys: Set<String>,
+    cacheKeyOf: (OpdsEntry, ReadableLink) -> String,
+    onNavigate: () -> Unit,
+    onRead: (ReadableLink) -> Unit
+) {
+    Text(
+        text = entry.title,
+        style = MaterialTheme.typography.titleMedium,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis
+    )
+    val showAuthor = entry.author.isNotBlank() && entry.author != "Unknown" && !canNavigate
+    if (showAuthor || (!canNavigate && progressLabel != null)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (showAuthor) {
+                Text(
+                    text = "作者：${entry.author}",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            if (progressLabel != null) {
+                Text(
+                    text = progressLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+    if (entry.summary.isNotBlank()) {
+        Text(
+            text = entry.summary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (canNavigate) {
+            Button(
+                onClick = onNavigate,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                if (canNavigate) {
-                    Button(
-                        onClick = onNavigate,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.FolderOpen, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("開啟")
-                    }
-                }
-                readableLinks.forEach { link ->
-                    val isDownloaded = downloadedComicKeys.contains(cacheKeyOf(entry, link))
-                    Button(
-                        onClick = { onRead(link) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = if (isDownloaded) Icons.Filled.Visibility else Icons.Filled.Download,
-                            contentDescription = if (isDownloaded) "View" else "Download"
-                        )
-                    }
-                }
+                Icon(Icons.Filled.FolderOpen, contentDescription = null)
+                Spacer(Modifier.size(8.dp))
+                Text("開啟")
+            }
+        }
+        readableLinks.forEach { link ->
+            val isDownloaded = downloadedComicKeys.contains(cacheKeyOf(entry, link))
+            Button(
+                onClick = { onRead(link) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = if (isDownloaded) Icons.Filled.Visibility else Icons.Filled.Download,
+                    contentDescription = if (isDownloaded) "View" else "Download"
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EntryCoverThumbnail(
+    coverImageUrl: String,
+    username: String,
+    password: String,
+    loadCoverBitmap: suspend (String, String, String) -> Bitmap?
+) {
+    val coverBitmap by produceState<Bitmap?>(initialValue = null, coverImageUrl, username, password) {
+        value = loadCoverBitmap(coverImageUrl, username, password)
+    }
+
+    Card(
+        modifier = Modifier.size(width = 72.dp, height = 96.dp)
+    ) {
+        if (coverBitmap != null) {
+            Image(
+                bitmap = coverBitmap!!.asImageBitmap(),
+                contentDescription = "封面",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "封面",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

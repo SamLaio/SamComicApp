@@ -1,6 +1,8 @@
 package com.samcomic.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.webkit.URLUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,6 +32,18 @@ class OpdsRepository(
 
     suspend fun loadOpenSearchTemplate(url: String, username: String, password: String): String? = withContext(Dispatchers.IO) {
         parseOpenSearchTemplate(fetchText(url, username, password))
+    }
+
+    suspend fun loadImageBitmap(url: String, username: String, password: String): Bitmap? = withContext(Dispatchers.IO) {
+        val request = requestBuilder(url, username, password)
+            .header("Accept", "image/*,*/*")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            val body = response.body ?: return@use null
+            val bytes = body.bytes()
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }
     }
 
     suspend fun downloadComic(

@@ -149,8 +149,16 @@ class ComicViewModel(
         return navigator.readableLinks(entry)
     }
 
+    fun coverImageUrl(entry: OpdsEntry): String? {
+        return navigator.coverImageUrl(entry)
+    }
+
     fun hasNavigation(entry: OpdsEntry): Boolean {
         return navigator.pickNavigationLink(entry) != null
+    }
+
+    suspend fun loadCoverBitmap(url: String, username: String, password: String): Bitmap? {
+        return repository.loadImageBitmap(url, username, password)
     }
 
     fun readingProgressLabel(context: Context, entry: OpdsEntry, link: ReadableLink): String? {
