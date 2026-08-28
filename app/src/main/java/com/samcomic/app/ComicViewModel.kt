@@ -188,6 +188,75 @@ class ComicViewModel(
         return progressKey(entry, link)
     }
 
+    fun predownload(context: Context, entries: List<OpdsEntry>) {
+        val targets = entries.mapNotNull { entry ->
+            navigator.readableLinks(entry).firstOrNull()?.let { link ->
+                QueuedComic(entry = entry, link = link)
+            }
+        }
+        if (targets.isEmpty()) return
+
+        viewModelScope.launch {
+            var downloadedCount = 0
+            _uiState.value = _uiState.value.copy(
+                loadingReader = true,
+                downloadingComic = true,
+                downloadProgress = 0f,
+                status = "準備預先下載 ${targets.size} 本",
+                error = null
+            )
+            runCatching {
+                targets.forEachIndexed { index, target ->
+                    val cacheKey = downloadCacheKey(target.entry, target.link)
+                    val cached = repository.cachedDownloadFile(
+                        context = context.applicationContext,
+                        cacheKey = cacheKey,
+                        skipCacheKey = currentDownloadedComicKey
+                    )
+                    if (cached == null) {
+                        repository.downloadComic(
+                            context = context.applicationContext,
+                            cacheKey = cacheKey,
+                            link = target.link,
+                            title = target.entry.title,
+                            username = _uiState.value.username,
+                            password = _uiState.value.password
+                        ) { downloadedBytes, totalBytes ->
+                            val progress = if (totalBytes > 0L) {
+                                (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                            } else {
+                                null
+                            }
+                            val percent = progress?.let { " ${(it * 100).toInt()}%" }.orEmpty()
+                            _uiState.value = _uiState.value.copy(
+                                downloadProgress = progress,
+                                status = "預先下載 ${index + 1}/${targets.size}：${target.entry.title}$percent"
+                            )
+                        }
+                    }
+                    downloadedCount += 1
+                }
+            }.onSuccess {
+                refreshDownloadedComicKeys(context.applicationContext)
+                _uiState.value = _uiState.value.copy(
+                    loadingReader = false,
+                    downloadingComic = false,
+                    downloadProgress = null,
+                    status = "已預先下載 $downloadedCount 本"
+                )
+            }.onFailure { ex ->
+                refreshDownloadedComicKeys(context.applicationContext)
+                _uiState.value = _uiState.value.copy(
+                    loadingReader = false,
+                    downloadingComic = false,
+                    downloadProgress = null,
+                    status = "",
+                    error = ex.message ?: "預先下載失敗"
+                )
+            }
+        }
+    }
+
     fun refreshDownloadedComicKeys(context: Context) {
         viewModelScope.launch {
             val keys = repository.scanDownloadedComicKeys(context.applicationContext, currentDownloadedComicKey)

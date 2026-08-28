@@ -11,9 +11,11 @@ import android.view.WindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +51,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -162,6 +165,7 @@ private fun SamComicApp(
     var showConnectionPanel by rememberSaveable { mutableStateOf(true) }
     var showSearchPanel by rememberSaveable { mutableStateOf(false) }
     var searchText by rememberSaveable { mutableStateOf("") }
+    var lastCatalogScrollVersion by rememberSaveable { mutableStateOf(-1) }
 
     LaunchedEffect(externalOpenRequest?.token) {
         val request = externalOpenRequest ?: return@LaunchedEffect
@@ -170,6 +174,13 @@ private fun SamComicApp(
 
     BackHandler(enabled = state.document != null) {
         vm.closeReader()
+    }
+
+    LaunchedEffect(state.catalogVersion, state.document) {
+        if (state.document == null && state.catalogVersion != lastCatalogScrollVersion) {
+            catalogListState.scrollToItem(0)
+            lastCatalogScrollVersion = state.catalogVersion
+        }
     }
 
     Scaffold { padding ->
@@ -260,6 +271,7 @@ private fun CatalogScreen(
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val prefs = remember(context) { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    var selectedDownloadKeys by rememberSaveable { mutableStateOf(setOf<String>()) }
     val hasLoadedFeed = state.feedTitle.isNotBlank()
     val titleCollapseFraction = if (catalogListState.firstVisibleItemIndex > 0) {
         1f
@@ -307,15 +319,15 @@ private fun CatalogScreen(
         vm.refreshDownloadedComicKeys(context)
     }
 
-    LaunchedEffect(state.catalogVersion) {
-        catalogListState.scrollToItem(0)
-    }
-
     LaunchedEffect(state.canSearch) {
         if (!state.canSearch) {
             onShowSearchPanelChange(false)
             onSearchTextChange("")
         }
+    }
+
+    LaunchedEffect(state.catalogVersion) {
+        selectedDownloadKeys = emptySet()
     }
 
     Column(
@@ -473,6 +485,23 @@ private fun CatalogScreen(
             )
         }
 
+        val selectedEntries = state.entries.filter { entry ->
+            vm.readableLinks(entry).firstOrNull()?.let { link ->
+                cacheKeyOf(entry, link) in selectedDownloadKeys
+            } == true
+        }
+        if (selectedDownloadKeys.isNotEmpty()) {
+            BatchDownloadRow(
+                selectedCount = selectedEntries.size,
+                enabled = selectedEntries.isNotEmpty() && !state.downloadingComic && !state.loadingReader,
+                onDownload = {
+                    vm.predownload(context, selectedEntries)
+                    selectedDownloadKeys = emptySet()
+                },
+                onClear = { selectedDownloadKeys = emptySet() }
+            )
+        }
+
         Box(
             modifier = Modifier.fillMaxSize(),
         ) {
@@ -494,6 +523,16 @@ private fun CatalogScreen(
                     val progressLabel = readableLinks.firstOrNull()?.let { link ->
                         vm.readingProgressLabel(context, entry, link)
                     }
+                    val selectableKey = readableLinks.firstOrNull()?.let { link -> cacheKeyOf(entry, link) }
+                    val toggleSelection: () -> Unit = {
+                        selectableKey?.let { key ->
+                            selectedDownloadKeys = if (key in selectedDownloadKeys) {
+                                selectedDownloadKeys - key
+                            } else {
+                                selectedDownloadKeys + key
+                            }
+                        }
+                    }
                     EntryCard(
                         entry = entry,
                         canNavigate = vm.hasNavigation(entry),
@@ -505,6 +544,10 @@ private fun CatalogScreen(
                         progressLabel = progressLabel,
                         downloadedComicKeys = downloadedComicKeys,
                         cacheKeyOf = cacheKeyOf,
+                        selectionMode = selectedDownloadKeys.isNotEmpty(),
+                        selectedForDownload = selectableKey?.let { it in selectedDownloadKeys } == true,
+                        canSelectForDownload = selectableKey != null,
+                        onToggleSelected = toggleSelection,
                         onNavigate = { vm.openNavigation(entry) },
                         onRead = { link -> vm.downloadAndOpen(context, entry, link) }
                     )
@@ -514,6 +557,37 @@ private fun CatalogScreen(
                 state = catalogListState,
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
+        }
+    }
+}
+
+@Composable
+private fun BatchDownloadRow(
+    selectedCount: Int,
+    enabled: Boolean,
+    onDownload: () -> Unit,
+    onClear: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "已選 $selectedCount 本",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f)
+        )
+        Button(
+            onClick = onDownload,
+            enabled = enabled
+        ) {
+            Icon(Icons.Filled.Download, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("下載")
+        }
+        IconButton(onClick = onClear) {
+            Icon(Icons.Filled.Close, contentDescription = "取消選取")
         }
     }
 }
@@ -723,6 +797,7 @@ private fun CatalogNavigationRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EntryCard(
     entry: OpdsEntry,
@@ -735,13 +810,28 @@ private fun EntryCard(
     progressLabel: String?,
     downloadedComicKeys: Set<String>,
     cacheKeyOf: (OpdsEntry, ReadableLink) -> String,
+    selectionMode: Boolean,
+    selectedForDownload: Boolean,
+    canSelectForDownload: Boolean,
+    onToggleSelected: () -> Unit,
     onNavigate: () -> Unit,
     onRead: (ReadableLink) -> Unit
 ) {
+    val canOpenCard = canNavigate && readableLinks.isEmpty()
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = canNavigate && readableLinks.isEmpty(), onClick = onNavigate)
+            .combinedClickable(
+                enabled = canSelectForDownload || canOpenCard,
+                onClick = {
+                    if (selectionMode && canSelectForDownload) {
+                        onToggleSelected()
+                    } else if (canOpenCard) {
+                        onNavigate()
+                    }
+                },
+                onLongClick = if (canSelectForDownload) onToggleSelected else null
+            )
     ) {
         Column(
             modifier = Modifier
@@ -772,6 +862,10 @@ private fun EntryCard(
                             progressLabel = progressLabel,
                             downloadedComicKeys = downloadedComicKeys,
                             cacheKeyOf = cacheKeyOf,
+                            selectionMode = selectionMode,
+                            selectedForDownload = selectedForDownload,
+                            canSelectForDownload = canSelectForDownload,
+                            onToggleSelected = onToggleSelected,
                             onNavigate = onNavigate,
                             onRead = onRead
                         )
@@ -785,6 +879,10 @@ private fun EntryCard(
                     progressLabel = progressLabel,
                     downloadedComicKeys = downloadedComicKeys,
                     cacheKeyOf = cacheKeyOf,
+                    selectionMode = selectionMode,
+                    selectedForDownload = selectedForDownload,
+                    canSelectForDownload = canSelectForDownload,
+                    onToggleSelected = onToggleSelected,
                     onNavigate = onNavigate,
                     onRead = onRead
                 )
@@ -801,15 +899,32 @@ private fun EntryCardBody(
     progressLabel: String?,
     downloadedComicKeys: Set<String>,
     cacheKeyOf: (OpdsEntry, ReadableLink) -> String,
+    selectionMode: Boolean,
+    selectedForDownload: Boolean,
+    canSelectForDownload: Boolean,
+    onToggleSelected: () -> Unit,
     onNavigate: () -> Unit,
     onRead: (ReadableLink) -> Unit
 ) {
-    Text(
-        text = entry.title,
-        style = MaterialTheme.typography.titleMedium,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis
-    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (selectionMode && canSelectForDownload) {
+            Checkbox(
+                checked = selectedForDownload,
+                onCheckedChange = { onToggleSelected() }
+            )
+        }
+        Text(
+            text = entry.title,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
     val showAuthor = entry.author.isNotBlank() && entry.author != "Unknown" && !canNavigate
     if (showAuthor || (!canNavigate && progressLabel != null)) {
         Row(
@@ -846,29 +961,31 @@ private fun EntryCardBody(
         )
     }
 
-    Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        if (canNavigate) {
-            Button(
-                onClick = onNavigate,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Filled.FolderOpen, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("開啟")
+    if (!selectionMode) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (canNavigate) {
+                Button(
+                    onClick = onNavigate,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.FolderOpen, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("開啟")
+                }
             }
-        }
-        readableLinks.forEach { link ->
-            val isDownloaded = downloadedComicKeys.contains(cacheKeyOf(entry, link))
-            Button(
-                onClick = { onRead(link) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = if (isDownloaded) Icons.Filled.Visibility else Icons.Filled.Download,
-                    contentDescription = if (isDownloaded) "View" else "Download"
-                )
+            readableLinks.forEach { link ->
+                val isDownloaded = downloadedComicKeys.contains(cacheKeyOf(entry, link))
+                Button(
+                    onClick = { onRead(link) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = if (isDownloaded) Icons.Filled.Visibility else Icons.Filled.Download,
+                        contentDescription = if (isDownloaded) "View" else "Download"
+                    )
+                }
             }
         }
     }
